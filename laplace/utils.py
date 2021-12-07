@@ -12,16 +12,15 @@ def get_nll(out_dist, targets):
 
 
 @torch.no_grad()
-def validate(laplace, val_loader, pred_type='glm', link_approx='probit', n_samples=100):
+def validate(laplace, val_loader, pred_type="glm", link_approx="probit", n_samples=100):
     laplace.model.eval()
     output_means, output_vars = list(), list()
     targets = list()
     for X, y in val_loader:
         X, y = X.to(laplace._device), y.to(laplace._device)
         out = laplace(
-            X, pred_type=pred_type,
-            link_approx=link_approx,
-            n_samples=n_samples)
+            X, pred_type=pred_type, link_approx=link_approx, n_samples=n_samples
+        )
 
         if type(out) == tuple:
             output_means.append(out[0])
@@ -33,8 +32,10 @@ def validate(laplace, val_loader, pred_type='glm', link_approx='probit', n_sampl
 
     if len(output_vars) == 0:
         return torch.cat(output_means, dim=0), torch.cat(targets, dim=0)
-    return ((torch.cat(output_means, dim=0), torch.cat(output_vars, dim=0)),
-            torch.cat(targets, dim=0))
+    return (
+        (torch.cat(output_means, dim=0), torch.cat(output_vars, dim=0)),
+        torch.cat(targets, dim=0),
+    )
 
 
 def parameters_per_layer(model):
@@ -66,9 +67,11 @@ def invsqrt_precision(M):
 
 
 def _is_batchnorm(module):
-    if isinstance(module, BatchNorm1d) or \
-        isinstance(module, BatchNorm2d) or \
-            isinstance(module, BatchNorm3d):
+    if (
+        isinstance(module, BatchNorm1d)
+        or isinstance(module, BatchNorm2d)
+        or isinstance(module, BatchNorm3d)
+    ):
         return True
     return False
 
@@ -103,9 +106,9 @@ def kron(t1, t2):
     tiled_t2 = t2.repeat(t1_height, t1_width)
     expanded_t1 = (
         t1.unsqueeze(2)
-          .unsqueeze(3)
-          .repeat(1, t2_height, t2_width, 1)
-          .view(out_height, out_width)
+        .unsqueeze(3)
+        .repeat(1, t2_height, t2_width, 1)
+        .view(out_height, out_width)
     )
 
     return expanded_t1 * tiled_t2
@@ -123,14 +126,14 @@ def diagonal_add_scalar(X, value):
     -------
     X_add_scalar : torch.Tensor
     """
-    if not X.device == torch.device('cpu'):
+    if not X.device == torch.device("cpu"):
         indices = torch.cuda.LongTensor([[i, i] for i in range(X.shape[0])])
     else:
         indices = torch.LongTensor([[i, i] for i in range(X.shape[0])])
     values = X.new_ones(X.shape[0]).mul(value)
     return X.index_put(tuple(indices.t()), values, accumulate=True)
 
- 
+
 def symeig(M):
     """Symetric eigendecomposition avoiding failure cases by
     adding and removing jitter to the diagonal.
@@ -147,18 +150,18 @@ def symeig(M):
         eigenvectors
     """
     try:
-        L, W = torch.linalg.eigh(M, UPLO='U')
+        L, W = torch.linalg.eigh(M, UPLO="U")
     except RuntimeError:  # did not converge
-        logging.info('SYMEIG: adding jitter, did not converge.')
+        logging.info("SYMEIG: adding jitter, did not converge.")
         # use W L W^T + I = W (L + I) W^T
         M = M + torch.eye(M.shape[0])
         try:
-            L, W = torch.linalg.eigh(M, UPLO='U')
-            L -= 1.
+            L, W = torch.linalg.eigh(M, UPLO="U")
+            L -= 1.0
         except RuntimeError:
-            stats = f'diag: {M.diagonal()}, max: {M.abs().max()}, '
-            stats = stats + f'min: {M.abs().min()}, mean: {M.abs().mean()}'
-            logging.info(f'SYMEIG: adding jitter failed. Stats: {stats}')
+            stats = f"diag: {M.diagonal()}, max: {M.abs().max()}, "
+            stats = stats + f"min: {M.abs().min()}, mean: {M.abs().mean()}"
+            logging.info(f"SYMEIG: adding jitter failed. Stats: {stats}")
             exit()
     # eigenvalues of symeig at least 0
     L = L.clamp(min=0.0)
@@ -183,6 +186,6 @@ def block_diag(blocks):
     p_cur = 0
     for block in blocks:
         p_block = block.shape[0]
-        M[p_cur:p_cur+p_block, p_cur:p_cur+p_block] = block
+        M[p_cur : p_cur + p_block, p_cur : p_cur + p_block] = block
         p_cur += p_block
     return M

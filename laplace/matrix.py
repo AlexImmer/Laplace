@@ -19,6 +19,7 @@ class Kron:
         each element in the list is a Tuple of two Kronecker factors Q, H
         or a single matrix approximating the Hessian (in case of bias, for example)
     """
+
     def __init__(self, kfacs):
         self.kfacs = kfacs
 
@@ -46,12 +47,14 @@ class Kron:
                 elif p.ndim > 2:
                     P_in, P_out = p.shape[0], np.prod(p.shape[1:])
 
-                kfacs.append([
-                    torch.zeros(P_in, P_in, device=device),
-                    torch.zeros(P_out, P_out, device=device)
-                ])
+                kfacs.append(
+                    [
+                        torch.zeros(P_in, P_in, device=device),
+                        torch.zeros(P_out, P_out, device=device),
+                    ]
+                )
             else:
-                raise ValueError('Invalid parameter shape in network.')
+                raise ValueError("Invalid parameter shape in network.")
         return cls(kfacs)
 
     def __add__(self, other):
@@ -66,10 +69,12 @@ class Kron:
         kron : Kron
         """
         if not isinstance(other, Kron):
-            raise ValueError('Can only add Kron to Kron.')
+            raise ValueError("Can only add Kron to Kron.")
 
-        kfacs = [[Hi.add(Hj) for Hi, Hj in zip(Fi, Fj)]
-                 for Fi, Fj in zip(self.kfacs, other.kfacs)]
+        kfacs = [
+            [Hi.add(Hj) for Hi, Hj in zip(Fi, Fj)]
+            for Fi, Fj in zip(self.kfacs, other.kfacs)
+        ]
         return Kron(kfacs)
 
     def __mul__(self, scalar: Union[float, torch.Tensor]):
@@ -86,10 +91,10 @@ class Kron:
         kron : Kron
         """
         if not _is_valid_scalar(scalar):
-            raise ValueError('Input not valid python or torch scalar.')
+            raise ValueError("Input not valid python or torch scalar.")
 
         # distribute factors evenly so that each group is multiplied by factor
-        kfacs = [[pow(scalar, 1/len(F)) * Hi for Hi in F] for F in self.kfacs]
+        kfacs = [[pow(scalar, 1 / len(F)) * Hi for Hi in F] for F in self.kfacs]
         return Kron(kfacs)
 
     def __len__(self):
@@ -140,18 +145,18 @@ class Kron:
             if len(Fs) == 1:
                 Q = Fs[0]
                 p = len(Q)
-                W_p = W[:, cur_p:cur_p+p].T
+                W_p = W[:, cur_p : cur_p + p].T
                 SW.append((Q @ W_p).T)
                 cur_p += p
             elif len(Fs) == 2:
                 Q, H = Fs
                 p_in, p_out = len(Q), len(H)
                 p = p_in * p_out
-                W_p = W[:, cur_p:cur_p+p].reshape(B * K, p_in, p_out)
+                W_p = W[:, cur_p : cur_p + p].reshape(B * K, p_in, p_out)
                 SW.append((Q @ W_p @ H.T).reshape(B * K, p_in * p_out))
                 cur_p += p
             else:
-                raise AttributeError('Shape mismatch')
+                raise AttributeError("Shape mismatch")
         SW = torch.cat(SW, dim=1).reshape(B, K, P)
         return SW
 
@@ -175,7 +180,7 @@ class Kron:
             result `(batch, classes, params)`
         """
         if exponent != 1:
-            raise ValueError('Only supported after decomposition.')
+            raise ValueError("Only supported after decomposition.")
         if W.ndim == 1:
             return self._bmm(W.unsqueeze(0).unsqueeze(0)).squeeze()
         elif W.ndim == 2:
@@ -183,7 +188,7 @@ class Kron:
         elif W.ndim == 3:
             return self._bmm(W)
         else:
-            raise ValueError('Invalid shape for W')
+            raise ValueError("Invalid shape for W")
 
     def logdet(self) -> torch.Tensor:
         """Compute log determinant of the Kronecker factors and sums them up.
@@ -279,14 +284,15 @@ class KronDecomposed:
 
     def _check_deltas(self, deltas: torch.Tensor):
         if not isinstance(deltas, torch.Tensor):
-            raise ValueError('Can only add torch.Tensor to KronDecomposed.')
+            raise ValueError("Can only add torch.Tensor to KronDecomposed.")
 
-        if (deltas.ndim == 0  # scalar
-            or (deltas.ndim == 1  # vector of length 1 or len(self)
-                and (len(deltas) == 1 or len(deltas) == len(self)))):
+        if deltas.ndim == 0 or (  # scalar
+            deltas.ndim == 1  # vector of length 1 or len(self)
+            and (len(deltas) == 1 or len(deltas) == len(self))
+        ):
             return
         else:
-            raise ValueError('Invalid shape of delta added to KronDecomposed.')
+            raise ValueError("Invalid shape of delta added to KronDecomposed.")
 
     def __add__(self, deltas: torch.Tensor):
         """Add scalar per layer or only scalar to Kronecker factors.
@@ -316,9 +322,11 @@ class KronDecomposed:
         kron : KronDecomposed
         """
         if not _is_valid_scalar(scalar):
-            raise ValueError('Invalid argument, can only multiply Kron with scalar.')
+            raise ValueError("Invalid argument, can only multiply Kron with scalar.")
 
-        eigenvalues = [[pow(scalar, 1/len(ls)) * l for l in ls] for ls in self.eigenvalues]
+        eigenvalues = [
+            [pow(scalar, 1 / len(ls)) * l for l in ls] for ls in self.eigenvalues
+        ]
         return KronDecomposed(self.eigenvectors, eigenvalues, self.deltas)
 
     def __len__(self) -> int:
@@ -346,7 +354,7 @@ class KronDecomposed:
                 else:
                     logdet += torch.log(torch.ger(l1, l2) + delta).sum()
             else:
-                raise ValueError('Too many Kronecker factors. Something went wrong.')
+                raise ValueError("Too many Kronecker factors. Something went wrong.")
         return logdet
 
     def _bmm(self, W: torch.Tensor, exponent: float = -1) -> torch.Tensor:
@@ -374,7 +382,7 @@ class KronDecomposed:
             if len(ls) == 1:
                 Q, l, p = Qs[0], ls[0], len(ls[0])
                 ldelta_exp = torch.pow(l + delta, exponent).reshape(-1, 1)
-                W_p = W[:, cur_p:cur_p+p].T
+                W_p = W[:, cur_p : cur_p + p].T
                 SW.append((Q @ (ldelta_exp * (Q.T @ W_p))).T)
                 cur_p += p
             elif len(ls) == 2:
@@ -385,15 +393,17 @@ class KronDecomposed:
                     l1d, l2d = l1 + torch.sqrt(delta), l2 + torch.sqrt(delta)
                     ldelta_exp = torch.pow(torch.ger(l1d, l2d), exponent).unsqueeze(0)
                 else:
-                    ldelta_exp = torch.pow(torch.ger(l1, l2) + delta, exponent).unsqueeze(0)
+                    ldelta_exp = torch.pow(
+                        torch.ger(l1, l2) + delta, exponent
+                    ).unsqueeze(0)
                 p_in, p_out = len(l1), len(l2)
-                W_p = W[:, cur_p:cur_p+p].reshape(B * K, p_in, p_out)
+                W_p = W[:, cur_p : cur_p + p].reshape(B * K, p_in, p_out)
                 W_p = (Q1.T @ W_p @ Q2) * ldelta_exp
                 W_p = Q1 @ W_p @ Q2.T
                 SW.append(W_p.reshape(B * K, p_in * p_out))
                 cur_p += p
             else:
-                raise AttributeError('Shape mismatch')
+                raise AttributeError("Shape mismatch")
         SW = torch.cat(SW, dim=1).reshape(B, K, P)
         return SW
 
@@ -427,7 +437,7 @@ class KronDecomposed:
         elif W.ndim == 3:
             return self._bmm(W, exponent)
         else:
-            raise ValueError('Invalid shape for W')
+            raise ValueError("Invalid shape for W")
 
     def to_matrix(self, exponent: float = 1) -> torch.Tensor:
         """Make the Kronecker factorization dense by computing the kronecker product.

@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Tuple, Callable, Optional
 
 
-__all__ = ['FeatureExtractor']
+__all__ = ["FeatureExtractor"]
 
 
 class FeatureExtractor(nn.Module):
@@ -24,6 +24,7 @@ class FeatureExtractor(nn.Module):
         if the name of the last layer is already known, otherwise it will
         be determined automatically.
     """
+
     def __init__(self, model: nn.Module, last_layer_name: Optional[str] = None) -> None:
         super().__init__()
         self.model = model
@@ -50,7 +51,9 @@ class FeatureExtractor(nn.Module):
             out = self.model(x)
         return out
 
-    def forward_with_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward_with_features(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass which returns the output of the penultimate layer along
         with the output of the last layer. If the last layer is not known yet,
         it will be determined when this function is called for the first time.
@@ -77,7 +80,7 @@ class FeatureExtractor(nn.Module):
         self._last_layer_name = last_layer_name
         self.last_layer = dict(self.model.named_modules())[last_layer_name]
         if not isinstance(self.last_layer, nn.Linear):
-            raise ValueError('Use model with a linear last layer.')
+            raise ValueError("Use model with a linear last layer.")
 
         # set forward hook to extract features in future forward passes
         self.last_layer.register_forward_hook(self._get_hook(last_layer_name))
@@ -86,6 +89,7 @@ class FeatureExtractor(nn.Module):
         def hook(_, input, __):
             # only accepts one input (expects linear layer)
             self._features[name] = input[0].detach()
+
         return hook
 
     def find_last_layer(self, x: torch.Tensor) -> torch.Tensor:
@@ -102,9 +106,10 @@ class FeatureExtractor(nn.Module):
             one batch of data to use as input for the forward pass
         """
         if self.last_layer is not None:
-            raise ValueError('Last layer is already known.')
+            raise ValueError("Last layer is already known.")
 
         act_out = dict()
+
         def get_act_hook(name):
             def act_hook(_, input, __):
                 # only accepts one input (expects linear layer)
@@ -114,6 +119,7 @@ class FeatureExtractor(nn.Module):
                     act_out[name] = None
                 # remove hook
                 handles[name].remove()
+
             return act_hook
 
         # set hooks for all modules
@@ -124,7 +130,7 @@ class FeatureExtractor(nn.Module):
         # check if model has more than one module
         # (there might be pathological exceptions)
         if len(handles) <= 2:
-            raise ValueError('The model only has one module.')
+            raise ValueError("The model only has one module.")
 
         # forward pass to find execution order
         out = self.model(x)
@@ -141,4 +147,4 @@ class FeatureExtractor(nn.Module):
 
                 return out
 
-        raise ValueError('Something went wrong (all modules have children).')
+        raise ValueError("Something went wrong (all modules have children).")

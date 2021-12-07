@@ -1,7 +1,14 @@
 import torch
 
 from backpack import backpack, extend, memory_cleanup
-from backpack.extensions import DiagGGNExact, DiagGGNMC, KFAC, KFLR, SumGradSquared, BatchGrad
+from backpack.extensions import (
+    DiagGGNExact,
+    DiagGGNMC,
+    KFAC,
+    KFLR,
+    SumGradSquared,
+    BatchGrad,
+)
 from backpack.context import CTX
 
 from laplace.curvature import CurvatureInterface, GGNInterface, EFInterface
@@ -9,8 +16,8 @@ from laplace.matrix import Kron
 
 
 class BackPackInterface(CurvatureInterface):
-    """Interface for Backpack backend.
-    """
+    """Interface for Backpack backend."""
+
     def __init__(self, model, likelihood, last_layer=False):
         super().__init__(model, likelihood, last_layer)
         extend(self._model)
@@ -47,7 +54,7 @@ class BackPackInterface(CurvatureInterface):
                 to_cat = []
                 for param in model.parameters():
                     to_cat.append(param.grad_batch.detach().reshape(x.shape[0], -1))
-                    delattr(param, 'grad_batch')
+                    delattr(param, "grad_batch")
                 Jk = torch.cat(to_cat, dim=1)
             to_stack.append(Jk)
             if i == 0:
@@ -81,23 +88,29 @@ class BackPackInterface(CurvatureInterface):
         loss = self.lossfunc(f, y)
         with backpack(BatchGrad()):
             loss.backward()
-        Gs = torch.cat([p.grad_batch.data.flatten(start_dim=1)
-                        for p in self._model.parameters()], dim=1)
+        Gs = torch.cat(
+            [p.grad_batch.data.flatten(start_dim=1) for p in self._model.parameters()],
+            dim=1,
+        )
         return Gs, loss
 
 
 class BackPackGGN(BackPackInterface, GGNInterface):
-    """Implementation of the `GGNInterface` using Backpack.
-    """
+    """Implementation of the `GGNInterface` using Backpack."""
+
     def __init__(self, model, likelihood, last_layer=False, stochastic=False):
         super().__init__(model, likelihood, last_layer)
         self.stochastic = stochastic
 
     def _get_diag_ggn(self):
         if self.stochastic:
-            return torch.cat([p.diag_ggn_mc.data.flatten() for p in self._model.parameters()])
+            return torch.cat(
+                [p.diag_ggn_mc.data.flatten() for p in self._model.parameters()]
+            )
         else:
-            return torch.cat([p.diag_ggn_exact.data.flatten() for p in self._model.parameters()])
+            return torch.cat(
+                [p.diag_ggn_exact.data.flatten() for p in self._model.parameters()]
+            )
 
     def _get_kron_factors(self):
         if self.stochastic:
@@ -111,7 +124,7 @@ class BackPackGGN(BackPackInterface, GGNInterface):
         # for M=N (full-batch) just M/N=1
         for F in kron.kfacs:
             if len(F) == 2:
-                F[1] *= M/N
+                F[1] *= M / N
         return kron
 
     def diag(self, X, y, **kwargs):
@@ -137,21 +150,21 @@ class BackPackGGN(BackPackInterface, GGNInterface):
 
 
 class BackPackEF(BackPackInterface, EFInterface):
-    """Implementation of `EFInterface` using Backpack.
-    """
+    """Implementation of `EFInterface` using Backpack."""
 
     def diag(self, X, y, **kwargs):
         f = self.model(X)
         loss = self.lossfunc(f, y)
         with backpack(SumGradSquared()):
             loss.backward()
-        diag_EF = torch.cat([p.sum_grad_squared.data.flatten()
-                             for p in self._model.parameters()])
+        diag_EF = torch.cat(
+            [p.sum_grad_squared.data.flatten() for p in self._model.parameters()]
+        )
 
         return self.factor * loss.detach(), self.factor * diag_EF
 
     def kron(self, X, y, **kwargs):
-        raise NotImplementedError('Unavailable through Backpack.')
+        raise NotImplementedError("Unavailable through Backpack.")
 
 
 def _cleanup(module):

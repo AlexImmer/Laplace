@@ -9,7 +9,7 @@ from laplace.matrix import Kron
 from laplace.curvature import BackPackGGN
 
 
-__all__ = ['FullLLLaplace', 'KronLLLaplace', 'DiagLLLaplace']
+__all__ = ["FullLLLaplace", "KronLLLaplace", "DiagLLLaplace"]
 
 
 class LLLaplace(ParametricLaplace):
@@ -57,12 +57,29 @@ class LLLaplace(ParametricLaplace):
         arguments passed to the backend on initialization, for example to
         set the number of MC samples for stochastic approximations.
     """
-    def __init__(self, model, likelihood, sigma_noise=1., prior_precision=1.,
-                 prior_mean=0., temperature=1., backend=BackPackGGN, last_layer_name=None,
-                 backend_kwargs=None):
-        super().__init__(model, likelihood, sigma_noise=sigma_noise, prior_precision=1.,
-                         prior_mean=0., temperature=temperature, backend=backend,
-                         backend_kwargs=backend_kwargs)
+
+    def __init__(
+        self,
+        model,
+        likelihood,
+        sigma_noise=1.0,
+        prior_precision=1.0,
+        prior_mean=0.0,
+        temperature=1.0,
+        backend=BackPackGGN,
+        last_layer_name=None,
+        backend_kwargs=None,
+    ):
+        super().__init__(
+            model,
+            likelihood,
+            sigma_noise=sigma_noise,
+            prior_precision=1.0,
+            prior_mean=0.0,
+            temperature=temperature,
+            backend=backend,
+            backend_kwargs=backend_kwargs,
+        )
         self.model = FeatureExtractor(deepcopy(model), last_layer_name=last_layer_name)
         if self.model.last_layer is None:
             self.mean = None
@@ -72,12 +89,14 @@ class LLLaplace(ParametricLaplace):
             self._prior_precision = prior_precision
             self._prior_mean = prior_mean
         else:
-            self.mean = parameters_to_vector(self.model.last_layer.parameters()).detach()
+            self.mean = parameters_to_vector(
+                self.model.last_layer.parameters()
+            ).detach()
             self.n_params = len(self.mean)
             self.n_layers = len(list(self.model.last_layer.parameters()))
             self.prior_precision = prior_precision
             self.prior_mean = prior_mean
-        self._backend_kwargs['last_layer'] = True
+        self._backend_kwargs["last_layer"] = True
 
     def fit(self, train_loader):
         """Fit the local Laplace approximation at the parameters of the model.
@@ -89,7 +108,7 @@ class LLLaplace(ParametricLaplace):
             `train_loader.dataset` needs to be set to access \\(N\\), size of the data set
         """
         if self.H is not None:
-            raise ValueError('Already fit.')
+            raise ValueError("Already fit.")
 
         self.model.eval()
 
@@ -100,7 +119,9 @@ class LLLaplace(ParametricLaplace):
                     self.model.find_last_layer(X[:1].to(self._device))
                 except (TypeError, AttributeError):
                     self.model.find_last_layer(X.to(self._device))
-            self.mean = parameters_to_vector(self.model.last_layer.parameters()).detach()
+            self.mean = parameters_to_vector(
+                self.model.last_layer.parameters()
+            ).detach()
             self.n_params = len(self.mean)
             self.n_layers = len(list(self.model.last_layer.parameters()))
             # here, check the already set prior precision again
@@ -121,7 +142,7 @@ class LLLaplace(ParametricLaplace):
             fs.append(self.model(X.to(self._device)).detach())
         vector_to_parameters(self.mean, self.model.last_layer.parameters())
         fs = torch.stack(fs)
-        if self.likelihood == 'classification':
+        if self.likelihood == "classification":
             fs = torch.softmax(fs, dim=-1)
         return fs
 
@@ -141,7 +162,7 @@ class LLLaplace(ParametricLaplace):
             return self.prior_precision
 
         else:
-            raise ValueError('Mismatch of prior and model. Diagonal or scalar prior.')
+            raise ValueError("Mismatch of prior and model. Diagonal or scalar prior.")
 
 
 class FullLLLaplace(LLLaplace, FullLaplace):
@@ -151,14 +172,33 @@ class FullLLLaplace(LLLaplace, FullLaplace):
     Mathematically, we have \\(P \\in \\mathbb{R}^{P \\times P}\\).
     See `FullLaplace`, `LLLaplace`, and `BaseLaplace` for the full interface.
     """
-    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
-    _key = ('last_layer', 'full')
 
-    def __init__(self, model, likelihood, sigma_noise=1., prior_precision=1.,
-                 prior_mean=0., temperature=1., backend=BackPackGGN, last_layer_name=None,
-                 backend_kwargs=None):
-        super().__init__(model, likelihood, sigma_noise, prior_precision,
-                         prior_mean, temperature, backend, last_layer_name, backend_kwargs)
+    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
+    _key = ("last_layer", "full")
+
+    def __init__(
+        self,
+        model,
+        likelihood,
+        sigma_noise=1.0,
+        prior_precision=1.0,
+        prior_mean=0.0,
+        temperature=1.0,
+        backend=BackPackGGN,
+        last_layer_name=None,
+        backend_kwargs=None,
+    ):
+        super().__init__(
+            model,
+            likelihood,
+            sigma_noise,
+            prior_precision,
+            prior_mean,
+            temperature,
+            backend,
+            last_layer_name,
+            backend_kwargs,
+        )
 
 
 class KronLLLaplace(LLLaplace, KronLaplace):
@@ -173,15 +213,35 @@ class KronLLLaplace(LLLaplace, KronLaplace):
     and computing posterior covariances, marginal likelihood, etc.
     Use of `damping` is possible by initializing or setting `damping=True`.
     """
-    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
-    _key = ('last_layer', 'kron')
 
-    def __init__(self, model, likelihood, sigma_noise=1., prior_precision=1.,
-                 prior_mean=0., temperature=1., backend=BackPackGGN, last_layer_name=None,
-                 damping=False, **backend_kwargs):
+    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
+    _key = ("last_layer", "kron")
+
+    def __init__(
+        self,
+        model,
+        likelihood,
+        sigma_noise=1.0,
+        prior_precision=1.0,
+        prior_mean=0.0,
+        temperature=1.0,
+        backend=BackPackGGN,
+        last_layer_name=None,
+        damping=False,
+        **backend_kwargs
+    ):
         self.damping = damping
-        super().__init__(model, likelihood, sigma_noise, prior_precision,
-                         prior_mean, temperature, backend, last_layer_name, backend_kwargs)
+        super().__init__(
+            model,
+            likelihood,
+            sigma_noise,
+            prior_precision,
+            prior_mean,
+            temperature,
+            backend,
+            last_layer_name,
+            backend_kwargs,
+        )
 
     def _init_H(self):
         self.H = Kron.init_from_model(self.model.last_layer, self._device)
@@ -193,11 +253,30 @@ class DiagLLLaplace(LLLaplace, DiagLaplace):
     Mathematically, we have \\(P \\approx \\textrm{diag}(P)\\).
     See `DiagLaplace`, `LLLaplace`, and `BaseLaplace` for the full interface.
     """
-    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
-    _key = ('last_layer', 'diag')
 
-    def __init__(self, model, likelihood, sigma_noise=1., prior_precision=1.,
-                 prior_mean=0., temperature=1., backend=BackPackGGN, last_layer_name=None,
-                 backend_kwargs=None):
-        super().__init__(model, likelihood, sigma_noise, prior_precision,
-                         prior_mean, temperature, backend, last_layer_name, backend_kwargs)
+    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
+    _key = ("last_layer", "diag")
+
+    def __init__(
+        self,
+        model,
+        likelihood,
+        sigma_noise=1.0,
+        prior_precision=1.0,
+        prior_mean=0.0,
+        temperature=1.0,
+        backend=BackPackGGN,
+        last_layer_name=None,
+        backend_kwargs=None,
+    ):
+        super().__init__(
+            model,
+            likelihood,
+            sigma_noise,
+            prior_precision,
+            prior_mean,
+            temperature,
+            backend,
+            last_layer_name,
+            backend_kwargs,
+        )

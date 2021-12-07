@@ -24,17 +24,18 @@ class CurvatureInterface:
         conversion factor between torch losses and base likelihoods
         For example, \\(\\frac{1}{2}\\) to get to \\(\\mathcal{N}(f, 1)\\) from MSELoss.
     """
+
     def __init__(self, model, likelihood, last_layer=False):
-        assert likelihood in ['regression', 'classification']
+        assert likelihood in ["regression", "classification"]
         self.likelihood = likelihood
         self.model = model
         self.last_layer = last_layer
-        if likelihood == 'regression':
-            self.lossfunc = MSELoss(reduction='sum')
+        if likelihood == "regression":
+            self.lossfunc = MSELoss(reduction="sum")
             self.factor = 0.5
         else:
-            self.lossfunc = CrossEntropyLoss(reduction='sum')
-            self.factor = 1.
+            self.lossfunc = CrossEntropyLoss(reduction="sum")
+            self.factor = 1.0
 
     @property
     def _model(self):
@@ -61,7 +62,7 @@ class CurvatureInterface:
 
     @staticmethod
     def last_layer_jacobians(model, x):
-        """Compute Jacobians \\(\\nabla_{\\theta_\\textrm{last}} f(x;\\theta_\\textrm{last})\\) 
+        """Compute Jacobians \\(\\nabla_{\\theta_\\textrm{last}} f(x;\\theta_\\textrm{last})\\)
         only at current last-layer parameter \\(\\theta_{\\textrm{last}}\\).
 
         Parameters
@@ -81,9 +82,11 @@ class CurvatureInterface:
         output_size = f.shape[-1]
 
         # calculate Jacobians using the feature vector 'phi'
-        identity = torch.eye(output_size, device=x.device).unsqueeze(0).tile(bsize, 1, 1)
+        identity = (
+            torch.eye(output_size, device=x.device).unsqueeze(0).tile(bsize, 1, 1)
+        )
         # Jacobians are batch x output x params
-        Js = torch.einsum('kp,kij->kijp', phi, identity).reshape(bsize, output_size, -1)
+        Js = torch.einsum("kp,kij->kijp", phi, identity).reshape(bsize, output_size, -1)
         if model.last_layer.bias is not None:
             Js = torch.cat([Js, identity], dim=2)
 
@@ -128,7 +131,7 @@ class CurvatureInterface:
     def kron(self, x, y, **kwargs):
         """Compute a Kronecker factored curvature approximation (such as KFAC).
         The approximation to \\(H\\) takes the form of two Kronecker factors \\(Q, H\\),
-        i.e., \\(H \\approx Q \\otimes H\\) for each Module in the neural network permitting 
+        i.e., \\(H \\approx Q \\otimes H\\) for each Module in the neural network permitting
         such curvature.
         \\(Q\\) is quadratic in the input-dimension of a module \\(p_{in} \\times p_{in}\\)
         and \\(H\\) in the output-dimension \\(p_{out} \\times p_{out}\\).
@@ -149,7 +152,7 @@ class CurvatureInterface:
         raise NotImplementedError
 
     def diag(self, x, y, **kwargs):
-        """Compute a diagonal Hessian approximation to \\(H\\) and is represented as a 
+        """Compute a diagonal Hessian approximation to \\(H\\) and is represented as a
         vector of the dimensionality of parameters \\(\\theta\\).
 
         Parameters
@@ -183,6 +186,7 @@ class GGNInterface(CurvatureInterface):
     stochastic : bool, default=False
         Fisher if stochastic else GGN
     """
+
     def __init__(self, model, likelihood, last_layer=False, stochastic=False):
         self.stochastic = stochastic
         super().__init__(model, likelihood, last_layer)
@@ -206,13 +210,13 @@ class GGNInterface(CurvatureInterface):
             full GGN approximation `(parameters, parameters)`
         """
         loss = self.factor * self.lossfunc(f, y)
-        if self.likelihood == 'regression':
-            H_ggn = torch.einsum('mkp,mkq->pq', Js, Js)
+        if self.likelihood == "regression":
+            H_ggn = torch.einsum("mkp,mkq->pq", Js, Js)
         else:
             # second derivative of log lik is diag(p) - pp^T
             ps = torch.softmax(f, dim=-1)
-            H_lik = torch.diag_embed(ps) - torch.einsum('mk,mc->mck', ps, ps)
-            H_ggn = torch.einsum('mcp,mck,mkq->pq', Js, H_lik, Js)
+            H_lik = torch.diag_embed(ps) - torch.einsum("mk,mc->mck", ps, ps)
+            H_ggn = torch.einsum("mcp,mck,mkq->pq", Js, H_lik, Js)
         return loss.detach(), H_ggn
 
     def full(self, x, y, **kwargs):
@@ -234,7 +238,7 @@ class GGNInterface(CurvatureInterface):
             GGN `(parameters, parameters)`
         """
         if self.stochastic:
-            raise ValueError('Stochastic approximation not implemented for full GGN.')
+            raise ValueError("Stochastic approximation not implemented for full GGN.")
 
         if self.last_layer:
             Js, f = self.last_layer_jacobians(self.model, x)

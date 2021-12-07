@@ -13,11 +13,11 @@ from laplace.utils import _is_batchnorm
 
 
 class AsdlInterface(CurvatureInterface):
-    """Interface for asdfghjkl backend.
-    """
+    """Interface for asdfghjkl backend."""
+
     def __init__(self, model, likelihood, last_layer=False):
-        if likelihood != 'classification':
-            raise ValueError('This backend only supports classification currently.')
+        if likelihood != "classification":
+            raise ValueError("This backend only supports classification currently.")
         super().__init__(model, likelihood, last_layer)
 
     @staticmethod
@@ -40,6 +40,7 @@ class AsdlInterface(CurvatureInterface):
         """
         Js = list()
         for i in range(model.output_size):
+
             def loss_fn(outputs, targets):
                 return outputs[:, i].sum()
 
@@ -77,31 +78,31 @@ class AsdlInterface(CurvatureInterface):
         kfacs = list()
         for module in curv._model.modules():
             if _is_batchnorm(module):
-                warnings.warn('BatchNorm unsupported for Kron, ignore.')
+                warnings.warn("BatchNorm unsupported for Kron, ignore.")
                 continue
 
             stats = getattr(module, self._ggn_type, None)
             if stats is None:
                 continue
-            if hasattr(module, 'bias') and module.bias is not None:
+            if hasattr(module, "bias") and module.bias is not None:
                 # split up bias and weights
                 kfacs.append([stats.kron.B, stats.kron.A[:-1, :-1]])
                 kfacs.append([stats.kron.B * stats.kron.A[-1, -1] / M])
-            elif hasattr(module, 'weight'):
+            elif hasattr(module, "weight"):
                 p, q = np.prod(stats.kron.B.shape), np.prod(stats.kron.A.shape)
                 if p == q == 1:
                     kfacs.append([stats.kron.B * stats.kron.A])
                 else:
                     kfacs.append([stats.kron.B, stats.kron.A])
             else:
-                raise ValueError(f'Whats happening with {module}?')
+                raise ValueError(f"Whats happening with {module}?")
         return Kron(kfacs)
 
     @staticmethod
     def _rescale_kron_factors(kron, N):
         for F in kron.kfacs:
             if len(F) == 2:
-                F[1] *= 1/N
+                F[1] *= 1 / N
         return kron
 
     def diag(self, X, y, **kwargs):
@@ -111,8 +112,9 @@ class AsdlInterface(CurvatureInterface):
             else:
                 f = self.model(X)
             loss = self.lossfunc(f, y)
-        curv = fisher_for_cross_entropy(self._model, self._ggn_type, SHAPE_DIAG,
-                                        inputs=X, targets=y)
+        curv = fisher_for_cross_entropy(
+            self._model, self._ggn_type, SHAPE_DIAG, inputs=X, targets=y
+        )
         diag_ggn = curv.matrices_to_vector(None)
         return self.factor * loss, self.factor * diag_ggn
 
@@ -123,8 +125,9 @@ class AsdlInterface(CurvatureInterface):
             else:
                 f = self.model(X)
             loss = self.lossfunc(f, y)
-        curv = fisher_for_cross_entropy(self._model, self._ggn_type, SHAPE_KRON,
-                                        inputs=X, targets=y)
+        curv = fisher_for_cross_entropy(
+            self._model, self._ggn_type, SHAPE_KRON, inputs=X, targets=y
+        )
         M = len(y)
         kron = self._get_kron_factors(curv, M)
         kron = self._rescale_kron_factors(kron, N)
@@ -132,8 +135,8 @@ class AsdlInterface(CurvatureInterface):
 
 
 class AsdlGGN(AsdlInterface, GGNInterface):
-    """Implementation of the `GGNInterface` using asdfghjkl.
-    """
+    """Implementation of the `GGNInterface` using asdfghjkl."""
+
     def __init__(self, model, likelihood, last_layer=False, stochastic=False):
         super().__init__(model, likelihood, last_layer)
         self.stochastic = stochastic
@@ -144,8 +147,7 @@ class AsdlGGN(AsdlInterface, GGNInterface):
 
 
 class AsdlEF(AsdlInterface, EFInterface):
-    """Implementation of the `EFInterface` using asdfghjkl.
-    """
+    """Implementation of the `EFInterface` using asdfghjkl."""
 
     @property
     def _ggn_type(self):
@@ -162,12 +164,12 @@ def _flatten_after_batch(tensor: torch.Tensor):
 def _get_batch_grad(model):
     batch_grads = list()
     for module in model.modules():
-        if hasattr(module, 'op_results'):
-            res = module.op_results['batch_grads']
-            if 'weight' in res:
-                batch_grads.append(_flatten_after_batch(res['weight']))
-            if 'bias' in res:
-                batch_grads.append(_flatten_after_batch(res['bias']))
-            if len(set(res.keys()) - {'weight', 'bias'}) > 0:
-                raise ValueError(f'Invalid parameter keys {res.keys()}')
+        if hasattr(module, "op_results"):
+            res = module.op_results["batch_grads"]
+            if "weight" in res:
+                batch_grads.append(_flatten_after_batch(res["weight"]))
+            if "bias" in res:
+                batch_grads.append(_flatten_after_batch(res["bias"]))
+            if len(set(res.keys()) - {"weight", "bias"}) > 0:
+                raise ValueError(f"Invalid parameter keys {res.keys()}")
     return torch.cat(batch_grads, dim=1)
