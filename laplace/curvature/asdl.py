@@ -1,9 +1,10 @@
 import warnings
+from asdfghjkl.fisher import calculate_fisher
 import numpy as np
 import torch
 
-from asdfghjkl import FISHER_EXACT, FISHER_MC, COV
-from asdfghjkl import SHAPE_KRON, SHAPE_DIAG
+from asdfghjkl import FISHER_EXACT, FISHER_MC, FISHER_EMP
+from asdfghjkl import SHAPE_KRON, SHAPE_DIAG, LOSS_MSE, LOSS_CROSS_ENTROPY
 from asdfghjkl import fisher_for_cross_entropy
 from asdfghjkl.gradient import batch_gradient
 
@@ -15,10 +16,10 @@ from laplace.utils import _is_batchnorm
 class AsdlInterface(CurvatureInterface):
     """Interface for asdfghjkl backend.
     """
-    def __init__(self, model, likelihood, last_layer=False):
-        if likelihood != 'classification':
-            raise ValueError('This backend only supports classification currently.')
-        super().__init__(model, likelihood, last_layer)
+
+    @property
+    def loss_type(self):
+        return LOSS_MSE if self.likelihood == 'regression' else LOSS_CROSS_ENTROPY
 
     @staticmethod
     def jacobians(model, x):
@@ -43,8 +44,8 @@ class AsdlInterface(CurvatureInterface):
             def loss_fn(outputs, targets):
                 return outputs[:, i].sum()
 
-            f = batch_gradient(model, loss_fn, x, None).detach()
-            Js.append(_get_batch_grad(model))
+            Jsi, f = batch_gradient(model, loss_fn, x, None)
+            Js.append(Jsi)
         Js = torch.stack(Js, dim=1)
         return Js, f
 
@@ -64,8 +65,7 @@ class AsdlInterface(CurvatureInterface):
         Gs : torch.Tensor
             gradients `(batch, parameters)`
         """
-        f = batch_gradient(self.model, self.lossfunc, x, y).detach()
-        Gs = _get_batch_grad(self._model)
+        Gs, f = batch_gradient(self.model, self.lossfunc, x, y)
         loss = self.lossfunc(f, y)
         return Gs, loss
 
@@ -111,24 +111,26 @@ class AsdlInterface(CurvatureInterface):
             else:
                 f = self.model(X)
             loss = self.lossfunc(f, y)
-        curv = fisher_for_cross_entropy(self._model, self._ggn_type, SHAPE_DIAG,
-                                        inputs=X, targets=y)
+        curv = calculate_fisher(self._model, self.loss_type, self._ggn_type, SHAPE_DIAG, 
+                                data_average=False, inputs=X, targets=y)
         diag_ggn = curv.matrices_to_vector(None)
-        return self.factor * loss, self.factor * diag_ggn
+        curv_factor = 1.0  # ASDL uses proper 1/2 * MSELoss
+        return self.factor * loss, curv_factor * diag_ggn
 
-    def kron(self, X, y, N, **wkwargs) -> [torch.Tensor, Kron]:
+    def kron(self, X, y, N, **wkwargs):
         with torch.no_grad():
             if self.last_layer:
                 f, X = self.model.forward_with_features(X)
             else:
                 f = self.model(X)
             loss = self.lossfunc(f, y)
-        curv = fisher_for_cross_entropy(self._model, self._ggn_type, SHAPE_KRON,
-                                        inputs=X, targets=y)
+        curv = calculate_fisher(self._model, self.loss_type, self._ggn_type, SHAPE_KRON, 
+                                data_average=False, inputs=X, targets=y)
         M = len(y)
         kron = self._get_kron_factors(curv, M)
         kron = self._rescale_kron_factors(kron, N)
-        return self.factor * loss, self.factor * kron
+        curv_factor = 1.0  # ASDL uses proper 1/2 * MSELoss
+        return self.factor * loss, curv_factor * kron
 
 
 class AsdlGGN(AsdlInterface, GGNInterface):
@@ -149,25 +151,4 @@ class AsdlEF(AsdlInterface, EFInterface):
 
     @property
     def _ggn_type(self):
-        return COV
-
-
-def _flatten_after_batch(tensor: torch.Tensor):
-    if tensor.ndim == 1:
-        return tensor.unsqueeze(-1)
-    else:
-        return tensor.flatten(start_dim=1)
-
-
-def _get_batch_grad(model):
-    batch_grads = list()
-    for module in model.modules():
-        if hasattr(module, 'op_results'):
-            res = module.op_results['batch_grads']
-            if 'weight' in res:
-                batch_grads.append(_flatten_after_batch(res['weight']))
-            if 'bias' in res:
-                batch_grads.append(_flatten_after_batch(res['bias']))
-            if len(set(res.keys()) - {'weight', 'bias'}) > 0:
-                raise ValueError(f'Invalid parameter keys {res.keys()}')
-    return torch.cat(batch_grads, dim=1)
+        return FISHER_EMP
