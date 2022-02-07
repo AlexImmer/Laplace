@@ -53,6 +53,14 @@ print(f'[MAP] Acc.: {acc_map:.1%}; ECE: {ece_map:.1%}; NLL: {nll_map:.3}')
 la = Laplace(model, 'classification',
              subset_of_weights='last_layer',
              hessian_structure='kron')
+
+# # GP Laplace
+# N_train = len(train_loader)
+# la = Laplace(model, 'classification',
+#              subset_of_weights='last_layer',
+#              hessian_structure='gp',
+#              diagonal_kernel=True, M=int(0.05*N_train))
+
 la.fit(train_loader)
 la.optimize_prior_precision(method='marglik')
 

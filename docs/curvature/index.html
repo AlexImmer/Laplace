@@ -268,6 +268,49 @@ For last-layer, reduced to <span><span class="MathJax_Preview">\theta_{last}</sp
 <dd>GGN <code>(parameters, parameters)</code></dd>
 </dl></div>
 </dd>
+<dt id="laplace.curvature.GGNInterface.H_log_likelihood"><code class="name flex">
+<span>def <span class="ident">H_log_likelihood</span></span>(<span>self, f, sigma_factor=None)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Second derivative (Hessian) of log-likelihood w.r.t. the output of NN <span><span class="MathJax_Preview">f</span><script type="math/tex">f</script></span></p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>f</code></strong> :&ensp;<code>torch.Tensor</code></dt>
+<dd>Output of the last layer of NN (before softmax layer)</dd>
+<dt><strong><code>sigma_factor</code></strong> :&ensp;<code>torch.Tensor</code></dt>
+<dd>Precision (scaled with temperature) in regression likelihood. See _H_factor property in BaseLaplace</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>H_lik</code></strong> :&ensp;<code>torch.Tensor</code></dt>
+<dd>Hessian of <span><span class="MathJax_Preview">p(y|f)</span><script type="math/tex">p(y|f)</script></span> w.r.t. <span><span class="MathJax_Preview">f</span><script type="math/tex">f</script></span> (batch, output_shape, output_shape)</dd>
+</dl></div>
+</dd>
+<dt id="laplace.curvature.GGNInterface.gp_quantities"><code class="name flex">
+<span>def <span class="ident">gp_quantities</span></span>(<span>self, X, y, sigma_factor)</span>
+</code></dt>
+<dd>
+<div class="desc"><h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>x</code></strong> :&ensp;<code>torch.Tensor</code></dt>
+<dd>input data <code>(batch, input_shape)</code></dd>
+<dt><strong><code>y</code></strong> :&ensp;<code>torch.Tensor</code></dt>
+<dd>labels <code>(batch, output_shape)</code></dd>
+<dt><strong><code>sigma_factor</code></strong> :&ensp;<code>inverse</code> of <code>(scaled) likelihood noise</code></dt>
+<dd>&nbsp;</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>loss</code></strong> :&ensp;<code>torch.tensor</code></dt>
+<dd>&nbsp;</dd>
+<dt><strong><code>Js</code></strong> :&ensp;<code>torch.tensor</code></dt>
+<dd>Jacobians (batch, output_shape, parameters)</dd>
+<dt><strong><code>f</code></strong> :&ensp;<code>torch.tensor</code></dt>
+<dd>NN output (batch, output_shape)</dd>
+<dt><strong><code>lambdas</code></strong> :&ensp;<code>torch.tensor</code></dt>
+<dd>Hessian of <span><span class="MathJax_Preview"> p(y|f) </span><script type="math/tex"> p(y|f) </script></span> w.r.t. <span><span class="MathJax_Preview">f</span><script type="math/tex">f</script></span> (batch, output_shape, output_shape)</dd>
+</dl></div>
+</dd>
 </dl>
 <h3>Inherited members</h3>
 <ul class="hlist">
@@ -450,6 +493,12 @@ using backpack's BatchGrad per output dimension.</p>
 <li><code><a title="laplace.curvature.backpack.BackPackInterface.last_layer_jacobians" href="curvature.html#laplace.curvature.curvature.CurvatureInterface.last_layer_jacobians">last_layer_jacobians</a></code></li>
 </ul>
 </li>
+<li><code><b><a title="laplace.curvature.curvature.GGNInterface" href="curvature.html#laplace.curvature.curvature.GGNInterface">GGNInterface</a></b></code>:
+<ul class="hlist">
+<li><code><a title="laplace.curvature.curvature.GGNInterface.H_log_likelihood" href="curvature.html#laplace.curvature.curvature.GGNInterface.H_log_likelihood">H_log_likelihood</a></code></li>
+<li><code><a title="laplace.curvature.curvature.GGNInterface.gp_quantities" href="curvature.html#laplace.curvature.curvature.GGNInterface.gp_quantities">gp_quantities</a></code></li>
+</ul>
+</li>
 </ul>
 </dd>
 <dt id="laplace.curvature.BackPackEF"><code class="flex name class">
@@ -573,6 +622,12 @@ using asdfghjkl's gradient per output dimension.</p>
 <li><code><a title="laplace.curvature.asdl.AsdlInterface.last_layer_jacobians" href="curvature.html#laplace.curvature.curvature.CurvatureInterface.last_layer_jacobians">last_layer_jacobians</a></code></li>
 </ul>
 </li>
+<li><code><b><a title="laplace.curvature.curvature.GGNInterface" href="curvature.html#laplace.curvature.curvature.GGNInterface">GGNInterface</a></b></code>:
+<ul class="hlist">
+<li><code><a title="laplace.curvature.curvature.GGNInterface.H_log_likelihood" href="curvature.html#laplace.curvature.curvature.GGNInterface.H_log_likelihood">H_log_likelihood</a></code></li>
+<li><code><a title="laplace.curvature.curvature.GGNInterface.gp_quantities" href="curvature.html#laplace.curvature.curvature.GGNInterface.gp_quantities">gp_quantities</a></code></li>
+</ul>
+</li>
 </ul>
 </dd>
 <dt id="laplace.curvature.AsdlEF"><code class="flex name class">
@@ -673,6 +728,8 @@ using asdfghjkl's gradient per output dimension.</p>
 <h4><code><a title="laplace.curvature.GGNInterface" href="#laplace.curvature.GGNInterface">GGNInterface</a></code></h4>
 <ul class="">
 <li><code><a title="laplace.curvature.GGNInterface.full" href="#laplace.curvature.GGNInterface.full">full</a></code></li>
+<li><code><a title="laplace.curvature.GGNInterface.H_log_likelihood" href="#laplace.curvature.GGNInterface.H_log_likelihood">H_log_likelihood</a></code></li>
+<li><code><a title="laplace.curvature.GGNInterface.gp_quantities" href="#laplace.curvature.GGNInterface.gp_quantities">gp_quantities</a></code></li>
 </ul>
 </li>
 <li>

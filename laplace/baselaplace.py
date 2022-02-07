@@ -1,14 +1,16 @@
 from math import sqrt, pi, log
 import numpy as np
 import torch
+import warnings
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from torch.distributions import MultivariateNormal, Dirichlet, Normal
+from torch.utils.data import DataLoader
 
-from laplace.utils import parameters_per_layer, invsqrt_precision, get_nll, validate, Kron
-from laplace.curvature import BackPackGGN, AsdlHessian
+from laplace.utils import parameters_per_layer, invsqrt_precision, get_nll, validate, Kron, SoDSampler
+from laplace.curvature import BackPackGGN, AsdlHessian, AsdlGGN
 
 
-__all__ = ['BaseLaplace', 'ParametricLaplace',
+__all__ = ['BaseLaplace', 'ParametricLaplace', 'FunctionalLaplace',
            'FullLaplace', 'KronLaplace', 'DiagLaplace', 'LowRankLaplace']
 
 
@@ -36,6 +38,7 @@ class BaseLaplace:
         arguments passed to the backend on initialization, for example to
         set the number of MC samples for stochastic approximations.
     """
+
     def __init__(self, model, likelihood, sigma_noise=1., prior_precision=1.,
                  prior_mean=0., temperature=1., backend=BackPackGGN, backend_kwargs=None):
         if likelihood not in ['classification', 'regression']:
@@ -99,7 +102,60 @@ class BaseLaplace:
             return factor * self.loss
 
     def __call__(self, x, pred_type, link_approx, n_samples):
+        """Compute the posterior predictive on input data `X`.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            `(batch_size, input_shape)`
+
+        pred_type : {'glm', 'nn', 'gp'},
+            type of posterior predictive, linearized GLM predictive or neural
+            network (nn) sampling predictive or Gaussian Process (GP) predictive.
+            For ParametricLaplace subclasses, the GLM predictive is consistent with
+            the curvature approximations used there.
+
+        link_approx : {'mc', 'probit', 'bridge'}
+            how to approximate the classification link function for the `'glm'`.
+            For `pred_type='nn'`, only 'mc' is possible.
+
+        n_samples : int
+            number of samples for `link_approx='mc'`.
+
+        Returns
+        -------
+        predictive: torch.Tensor or Tuple[torch.Tensor]
+            For `likelihood='classification'`, a torch.Tensor is returned with
+            a distribution over classes (similar to a Softmax).
+            For `likelihood='regression'`, a tuple of torch.Tensor is returned
+            with the mean and the predictive variance.
+        """
         raise NotImplementedError
+
+    @staticmethod
+    def _classification_predictive(f_mu, f_var, link_approx, n_samples):
+        """
+        """
+
+        if link_approx not in ['mc', 'probit', 'bridge']:
+            raise ValueError(f'Unsupported link approximation {link_approx}.')
+
+        if link_approx == 'mc':
+            try:
+                dist = MultivariateNormal(f_mu, f_var)
+            except:
+                dist = Normal(f_mu, torch.diagonal(f_var, dim1=1, dim2=2).sqrt())
+            return torch.softmax(dist.sample((n_samples,)), dim=-1).mean(dim=0)
+        elif link_approx == 'probit':
+            kappa = 1 / torch.sqrt(1. + np.pi / 8 * f_var.diagonal(dim1=1, dim2=2))
+            return torch.softmax(kappa * f_mu, dim=-1)
+        elif link_approx == 'bridge':
+            _, K = f_mu.size(0), f_mu.size(-1)
+            f_var_diag = torch.diagonal(f_var, dim1=1, dim2=2)
+            sum_exp = torch.sum(torch.exp(-f_mu), dim=1).unsqueeze(-1)
+            alpha = 1 / f_var_diag * (1 - 2 / K + torch.exp(f_mu) / (K ** 2) * sum_exp)
+            dist = Dirichlet(alpha)
+            return torch.nan_to_num(dist.mean, nan=1.0)
 
     def predictive(self, x, pred_type, link_approx, n_samples):
         return self(x, pred_type, link_approx, n_samples)
@@ -329,6 +385,7 @@ class ParametricLaplace(BaseLaplace):
                  prior_mean=0., temperature=1., backend=BackPackGGN, backend_kwargs=None):
         super().__init__(model, likelihood, sigma_noise, prior_precision,
                          prior_mean, temperature, backend, backend_kwargs)
+
         if not hasattr(self, 'H'):
             self._init_H()
             # posterior mean/mode
@@ -523,31 +580,13 @@ class ParametricLaplace(BaseLaplace):
         if pred_type not in ['glm', 'nn']:
             raise ValueError('Only glm and nn supported as prediction types.')
 
-        if link_approx not in ['mc', 'probit', 'bridge']:
-            raise ValueError(f'Unsupported link approximation {link_approx}.')
-
         if pred_type == 'glm':
             f_mu, f_var = self._glm_predictive_distribution(x)
             # regression
             if self.likelihood == 'regression':
                 return f_mu, f_var
             # classification
-            if link_approx == 'mc':
-                try:
-                    dist = MultivariateNormal(f_mu, f_var)
-                except:
-                    dist = Normal(f_mu, torch.diagonal(f_var, dim1=1, dim2=2).sqrt())
-                return torch.softmax(dist.sample((n_samples,)), dim=-1).mean(dim=0)
-            elif link_approx == 'probit':
-                kappa = 1 / torch.sqrt(1. + np.pi / 8 * f_var.diagonal(dim1=1, dim2=2))
-                return torch.softmax(kappa * f_mu, dim=-1)
-            elif link_approx == 'bridge':
-                _, K = f_mu.size(0), f_mu.size(-1)
-                f_var_diag = torch.diagonal(f_var, dim1=1, dim2=2)
-                sum_exp = torch.sum(torch.exp(-f_mu), dim=1).unsqueeze(-1)
-                alpha = 1/f_var_diag * (1 - 2/K + torch.exp(f_mu)/(K**2) * sum_exp)
-                dist = Dirichlet(alpha)
-                return torch.nan_to_num(dist.mean, nan=1.0)
+            return self._classification_predictive(f_mu, f_var, link_approx, n_samples)
         else:
             samples = self._nn_predictive_samples(x, n_samples)
             if self.likelihood == 'regression':
@@ -646,6 +685,9 @@ class ParametricLaplace(BaseLaplace):
                                  log_prior_prec_min=-4, log_prior_prec_max=4, grid_size=100,
                                  link_approx='probit', n_samples=100, verbose=False,
                                  cv_loss_with_var=False):
+        """
+        `optimize_prior_precision_base` from `BaseLaplace` with `pred_type` in `{'glm', 'nn'}`
+        """
         assert pred_type in ['glm', 'nn']
         self.optimize_prior_precision_base(pred_type, method, n_steps, lr,
                                            init_prior_prec, val_loader, loss,
@@ -1012,8 +1054,489 @@ class DiagLaplace(ParametricLaplace):
 
 
 class FunctionalLaplace(BaseLaplace):
-    pass
+    """
+    Applying the GGN (General Gauss Newton) approximation for the Hessian in the Laplace approximation of the posterior
+    turns the underlying probabilistic model from a BNN into a GLM (generalized linear model).
+    This GLM (in the weight space) is equivalent to a GP (in the function space), see
+    [Approximate Inference Turns Deep Networks into Gaussian Processes (Khan et al., 2019)](https://arxiv.org/abs/1906.01930)
+
+    This class implements the (approximate) GP inference through which
+    we obtain the desired quantities (posterior predictive, marginal log-likelihood).
+    See [Improving predictions of Bayesian neural nets via local linearization (Immer et al., 2021)](https://arxiv.org/abs/2008.08400)
+    for more details.
+
+    Note that for `likelihood='classification'`, we approximate \( L_{NN} \\) with a diagonal matrix
+    ( \\( L_{NN} \\) is a block-diagonal matrix, where blocks represent Hessians of per-data-point log-likelihood w.r.t.
+     neural network output \\( f \\), See Appendix [A.2.1](https://arxiv.org/abs/2008.08400) for exact definition). We
+     resort to such an approximation because of the (possible) errors found in Laplace approximation for
+     multiclass GP classification in Chapter 3.5 of [R&W 2006 GP book](http://www.gaussianprocess.org/gpml/),
+     see the question
+     [here](https://stats.stackexchange.com/questions/555183/gaussian-processes-multi-class-laplace-approximation)
+     for more details. Alternatively, one could also resort to *one-vs-one* or *one-vs-rest* implementations
+     for multiclass classification, however, that is not (yet) supported here.
+
+    Parameters
+    ----------
+    M : int
+        number of data points for Subset-of-Data (SOD) approximate GP inference.
+        By default (`M=None`), all data points from train dataset are used
+    diagonal_kernel : bool
+        GP kernel here is product of Jacobians, which results in a \\( C \\times C\\) matrix where \\(C\\) is the output
+        dimension. If `diagonal_kernel=True`, only a diagonal of a GP kernel is used. This is (somewhat) equivalent to
+        assuming independent GPs across output channels.
+
+    See `BaseLaplace` class for the full interface.
+    """
+    # key to map to correct subclass of BaseLaplace, (subset of weights, Hessian structure)
+    _key = ('all', 'gp')
+
+    def __init__(self, model, likelihood, M=None, sigma_noise=1., prior_precision=1.,
+                 prior_mean=0., temperature=1., backend=BackPackGGN, backend_kwargs=None,
+                 diagonal_kernel=False):
+        assert backend in [BackPackGGN, AsdlGGN]
+        super().__init__(model, likelihood, sigma_noise, prior_precision,
+                         prior_mean, temperature, backend, backend_kwargs)
+
+        self.M = M
+        self.diagonal_kernel = diagonal_kernel
+
+        self.K_MM = None
+        self.Sigma_inv = None  # (K_{MM} + L_MM_inv)^{-1}
+        self.train_loader = None  # needed in functional variance and marginal log likelihood
+        self.batch_size = None
+        self.prior_factor_sod = None
+        self.mu = None  # mean in the scatter term of the log marginal likelihood
+        self.L = None
+
+        # MAP estimate of NN parameters (used in regression marginal likelihood)
+        self.map_estimate = parameters_to_vector(self.model.parameters()).detach()
+
+    def _init_K_MM(self):
+        if self.diagonal_kernel:
+            self.K_MM = [torch.zeros(size=(self.M, self.M), device=self._device) for _ in range(self.n_outputs)]
+        else:
+            self.K_MM = torch.zeros(size=(self.M * self.n_outputs, self.M * self.n_outputs), device=self._device)
+
+    def _init_Sigma_inv(self):
+        if self.diagonal_kernel:
+            self.Sigma_inv = [torch.zeros(size=(self.M, self.M), device=self._device) for _ in range(self.n_outputs)]
+        else:
+            self.Sigma_inv = torch.zeros(size=(self.M * self.n_outputs, self.M * self.n_outputs), device=self._device)
+
+    def _curv_closure(self, X, y):
+        return self.backend.gp_quantities(X, y, self._H_factor)
+
+    def _store_K_batch(self, K_batch, i, j):
+        if self.diagonal_kernel:
+            for c in range(self.n_outputs):
+                self.K_MM[c][i * self.batch_size:min((i + 1) * self.batch_size, self.M),
+                j * self.batch_size:min((j + 1) * self.batch_size, self.M)] = K_batch[:, :, c]
+                if i != j:
+                    self.K_MM[c][j * self.batch_size:min((j + 1) * self.batch_size, self.M),
+                    i * self.batch_size:min((i + 1) * self.batch_size, self.M)] = torch.transpose(K_batch[:, :, c], 0,
+                                                                                                  1)
+        else:
+            bC = self.batch_size * self.n_outputs
+            MC = self.M * self.n_outputs
+            self.K_MM[i * bC:min((i + 1) * bC, MC), j * bC:min((j + 1) * bC, MC)] = K_batch
+            if i != j:
+                self.K_MM[j * bC:min((j + 1) * bC, MC), i * bC:min((i + 1) * bC, MC)] = torch.transpose(K_batch, 0, 1)
+
+    def _build_L(self, lambdas):
+        L_diag = torch.diagonal(torch.cat(lambdas, dim=0), dim1=-2, dim2=-1).reshape(-1)
+        if self.diagonal_kernel:
+            return [L_diag[i::self.n_outputs] for i in range(self.n_outputs)]
+        else:
+            return L_diag
+
+    def _build_Sigma_inv(self):
+        if self.diagonal_kernel:
+            return [torch.linalg.cholesky(self.K_MM[c] + torch.diag(1. / lambda_c)) for c, lambda_c in
+                    enumerate(self.L)]
+        else:
+            return torch.linalg.cholesky(self.K_MM + torch.diag(1 / self.L))
+
+    def _get_SoD_data_loader(self, train_loader: DataLoader, seed: int = 0) -> DataLoader:
+        """
+        Subset-of-Datapoints data loader
+        """
+        np.random.seed(seed)
+        return DataLoader(dataset=train_loader.dataset, batch_size=train_loader.batch_size,
+                          sampler=SoDSampler(N=len(train_loader.dataset), M=self.M), shuffle=False)
+
+    def fit(self, train_loader):
+        """Fit the Laplace approximation of a GP posterior.
+
+        Parameters
+        ----------
+        train_loader : torch.data.utils.DataLoader
+            `train_loader.dataset` needs to be set to access \\(N\\), size of the data set
+            `train_loader.batch_size` needs to be set to access \\(b\\) batch_size
+        """
+
+        X, _ = next(iter(train_loader))
+        with torch.no_grad():
+            self.n_outputs = self.model(X[:1].to(self._device)).shape[-1]
+        setattr(self.model, 'output_size', self.n_outputs)
+        self.batch_size = train_loader.batch_size
+
+        if self.likelihood == 'regression' and self.n_outputs > 1 and self.diagonal_kernel:
+            warnings.warn('Using FunctionalLaplace with the diagonal approximation of a GP kernel is not recommended '
+                          'in the case of multivariate regression. Predictive variance will likely be overestimated.')
+
+        self.model.eval()
+
+        N = len(train_loader.dataset)
+        self.n_data = N
+        if self.M is None:  # by default, all training data points are used for GP inference
+            self.M = N
+        train_loader = self._get_SoD_data_loader(train_loader)
+        self.train_loader = train_loader
+        self.prior_factor_sod = self.M / self.n_data
+
+        self._init_K_MM()
+        self._init_Sigma_inv()
+
+        f, lambdas, mu = [], [], []
+        for i, (X, y) in enumerate(train_loader):
+            X, y = X.to(self._device), y.to(self._device)
+            loss_batch, Js_batch, f_batch, lambdas_batch = self._curv_closure(X, y)
+            self.loss += loss_batch
+            lambdas.append(lambdas_batch)
+            f.append(f_batch)
+            mu.append(self._mean_scatter_term_batch(Js_batch, f_batch, y))  # needed for marginal likelihood
+            for j, (X2, y2) in enumerate(train_loader):
+                if j >= i:
+                    X2 = X2.to(self._device)
+                    K_batch = self._kernel_batch(Js_batch, X2)
+                    self._store_K_batch(K_batch, i, j)
+
+        self.L = self._build_L(lambdas)
+        self.Sigma_inv = self._build_Sigma_inv()
+        self.mu = torch.cat(mu, dim=0)
+
+    def __call__(self, x, pred_type='gp', link_approx='probit', n_samples=100):
+        if pred_type not in ['gp']:
+            raise ValueError('Only gp supported as prediction type.')
+
+        f_mu, f_var = self.gp_posterior(x)
+        # regression
+        if self.likelihood == 'regression':
+            return f_mu, f_var
+        # classification
+        return self._classification_predictive(f_mu, f_var, link_approx, n_samples)
+
+    def predictive_samples(self, x, n_samples=100):
+        """Sample from the posterior predictive on input data `x`.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            input data `(batch_size, input_shape)`
+
+        n_samples : int
+            number of samples
+
+        Returns
+        -------
+        samples : torch.Tensor
+            samples `(n_samples, batch_size, output_shape)`
+        """
+
+        f_mu, f_var = self.gp_posterior(x)
+        assert f_var.shape == torch.Size([f_mu.shape[0], f_mu.shape[1], f_mu.shape[1]])
+        dist = MultivariateNormal(f_mu, f_var)
+        samples = dist.sample((n_samples,))
+        if self.likelihood == 'regression':
+            return samples
+        return torch.softmax(samples, dim=-1)
+
+    def gp_posterior(self, X_star):
+        """
+        \\(q(f_* | x_*, \mathcal{D}) = \mathcal{N} (f_*, \Sigma_*) \\), where
+        \\(\Sigma_* =  K_{**} - K_{*M} (K_{MM}+ L_{MM}^{-1})^{-1} K_{M*}\\)
+
+        See eq. A.6 in [Improving predictions of Bayesian neural nets via local linearization](https://arxiv.org/abs/2008.08400)
+
+        Parameters
+        ----------
+        X_star : torch.Tensor
+            test data points \\(X_* \in \mathbb{R}^{N_{test} \\times C} \\)
+
+        Returns
+        -------
+        f_mu : torch.Tensor
+            mean of the GP posterior distribution
+        f_var: torch.Tensor
+            variance of the GP posterior distribution
 
 
-class SoDLaplace(FunctionalLaplace):
-    pass
+        """
+        Js, f_mu = self._jacobians(X_star)
+        f_var = self._gp_posterior_variance(Js, X_star)
+        if self.diagonal_kernel:
+            f_var = torch.diag_embed(f_var)
+        return f_mu.detach(), f_var.detach()
+
+    def _gp_posterior_variance(self, Js_star, X_star):
+        """
+        GP posterior variance: \\( k_{**} - K_{*M} (K_{MM}+ L_{MM}^{-1})^{-1} K_{M*}\\)
+
+        Parameters
+        ----------
+        Js_star : torch.Tensor
+            Jacobians of test data points
+        X_star : torch.Tensor
+            test data points \\(X \in \mathbb{R}^{N_{test} \\times C} \\)
+        """
+
+        K_star = self._kernel_star(Js_star, X_star)
+
+        K_M_star = []
+        for X_batch, _ in self.train_loader:
+            K_M_star_batch = self._kernel_batch_star(Js_star, X_batch)
+            K_M_star.append(K_M_star_batch)
+
+        f_var = K_star - self._build_K_star_M(K_M_star)
+        return f_var
+
+    def _build_K_star_M(self, K_M_star):
+        K_M_star = torch.cat(K_M_star, dim=1)
+        if self.diagonal_kernel:
+            prods = []
+            for c in range(self.n_outputs):
+                v = torch.squeeze(torch.linalg.solve(self.Sigma_inv[c], K_M_star[:, :, c].unsqueeze(2)), 2)
+                prod = torch.einsum('bm,bm->b', v, v)
+                prods.append(prod.unsqueeze(1))
+            prods = torch.cat(prods, dim=1)
+            return prods
+
+        else:
+            # in the reshape below we go from (N_test, M, C, C) to (N_test, M*C, C)
+            K_M_star = K_M_star.reshape(K_M_star.shape[0], -1, K_M_star.shape[-1])
+            v = torch.linalg.solve(self.Sigma_inv, K_M_star)
+            return torch.einsum('bcm,bcn->bmn', v, v)
+
+    def log_marginal_likelihood(self, prior_precision=None, sigma_noise=None):
+        """Compute the approximation to the log marginal likelihood subject
+
+        Requires that the Laplace approximation has been fit before.
+        The resulting torch.Tensor is differentiable in `prior_precision` and
+        `sigma_noise` if these have gradients enabled.
+        By passing `prior_precision` or `sigma_noise`, the current value is
+        overwritten. This is useful for iterating on the log marginal likelihood.
+
+        Parameters
+        ----------
+        prior_precision : torch.Tensor, optional
+            prior precision if should be changed from current `prior_precision` value
+        sigma_noise : [type], optional
+            observation noise standard deviation if should be changed
+
+        Returns
+        -------
+        log_marglik : torch.Tensor
+        """
+
+        # update prior precision (useful when iterating on marglik)
+        if prior_precision is not None:
+            self.prior_precision = prior_precision
+
+        # update sigma_noise (useful when iterating on marglik)
+        if sigma_noise is not None:
+            if self.likelihood != 'regression':
+                raise ValueError('Can only change sigma_noise for regression.')
+            self.sigma_noise = sigma_noise
+
+        self.fit(self.train_loader)
+        if self.likelihood == 'classification':
+            if not self.diagonal_kernel:
+                warnings.warn('Classification log marginal likelihood is not well-defined without the assumption on '
+                              'independent GP kernels.')
+            return self.log_likelihood - 0.5 * (self.scatter_lml + self.log_det_K)
+        elif self.likelihood == 'regression':
+            return - 0.5 * (self.log_det_K + self.scatter_lml + self.M * self.n_outputs * np.log(2 * np.pi))
+
+    @property
+    def log_det_K(self):
+        """
+        Computes log determinant term in GP marginal likelihood
+
+        For `classification` we use eq. (3.44) from Chapter 3.5 from
+        [GP book R&W 2006](http://www.gaussianprocess.org/gpml/chapters/) with
+        (note that we always use diagonal approximation \\(D\\) of the Hessian of log likelihood w.r.t. \\(f\\)):
+
+        log determinant term := \\( \log | I + D^{1/2}K D^{1/2} | \\)
+
+        For `regression`, we use ["standard" GP marginal likelihood](https://stats.stackexchange.com/questions/280105/log-marginal-likelihood-for-gaussian-process):
+
+        log determinant term := \\( \log | K + \\sigma_2 I | \\)
+        """
+        if self.likelihood == "regression":
+            if self.diagonal_kernel:
+                log_det = 0.
+                for c in range(self.n_outputs):
+                    log_det += torch.logdet(
+                        self.K_MM[c] + torch.eye(n=self.K_MM[c].shape[0]) * self.sigma_noise.square())
+                return log_det
+            else:
+                return torch.logdet(self.K_MM + torch.eye(n=self.K_MM.shape[0]) * self.sigma_noise.square())
+        else:
+            if self.diagonal_kernel:
+                log_det = 0.
+                for c in range(self.n_outputs):
+                    W = torch.sqrt(self.L[c])
+                    log_det += torch.logdet(W[:, None] * self.K_MM[c] * W + torch.eye(n=self.K_MM[c].shape[0]))
+                return log_det
+            else:
+                W = torch.sqrt(self.L)
+                return torch.logdet(W[:, None] * self.K_MM * W + torch.eye(n=self.K_MM.shape[0]))
+
+    @property
+    def scatter_lml(self, eps=0.001):
+        """
+        Compute scatter term in GP log marginal likelihood.
+
+        For `classification` we use eq. (3.44) from Chapter 3.5 from
+        [GP book R&W 2006](http://www.gaussianprocess.org/gpml/chapters/) with \\(\hat{f} = f \\):
+
+        scatter term := \\( f K^{-1} f^{T} \\)
+
+        For `regression`, we use ["standard" GP marginal likelihood](https://stats.stackexchange.com/questions/280105/log-marginal-likelihood-for-gaussian-process):
+
+        scatter term := \\( (y - m)K^{-1}(y -m )^T \\),
+        where \\( m \\) is the mean of the GP prior, which in our case corresponds to
+        \\( m := f + J (\\theta - \\theta_{MAP}) \\)
+
+        """
+        if self.likelihood == "regression":
+            noise = self.sigma_noise.square()
+        else:
+            noise = eps
+        if self.diagonal_kernel:
+            scatter = 0.
+            for c in range(self.n_outputs):
+                K_inv = torch.inverse(self.K_MM[c] + torch.eye(n=self.K_MM[c].shape[0]) * noise)
+                scatter += torch.dot(self.mu[:, c], torch.matmul(K_inv, self.mu[:, c]))
+        else:
+            K_inv = torch.inverse(self.K_MM + torch.eye(n=self.K_MM.shape[0]) * noise)
+            scatter = torch.dot(self.mu.reshape(-1), torch.matmul(K_inv, self.mu.reshape(-1)))
+
+        return scatter
+
+    def optimize_prior_precision(self, method='marglik', n_steps=100, lr=1e-1,
+                                 init_prior_prec=1., val_loader=None, loss=get_nll,
+                                 log_prior_prec_min=-4, log_prior_prec_max=4, grid_size=100,
+                                 pred_type='gp', link_approx='probit', n_samples=100,
+                                 verbose=False):
+        """
+        `optimize_prior_precision_base` from `BaseLaplace` with `pred_type='GP'`
+        """
+        assert pred_type == 'gp'
+        self.optimize_prior_precision_base(pred_type, method, n_steps, lr,
+                                           init_prior_prec, val_loader, loss,
+                                           log_prior_prec_min, log_prior_prec_max,
+                                           grid_size, link_approx, n_samples,
+                                           verbose)
+
+    def _kernel_batch(self, jacobians, batch):
+        """
+        Compute K_bb, which is part of K_MM kernel matrix.
+
+        Parameters
+        ----------
+        jacobians : torch.Tensor (b, C, P)
+        batch : torch.Tensor (b, C)
+
+        Returns
+        -------
+        kernel : torch.tensor
+            K_bb with shape (b * C, b * C)
+        """
+        jacobians_2, _ = self._jacobians(batch)
+        P = jacobians.shape[-1]  # nr model params
+        prior = self.prior_factor_sod / self.prior_precision_diag
+        if self.diagonal_kernel:
+            kernel = torch.einsum('bcp,ecp->bec', jacobians, jacobians_2 * prior)
+        else:
+            kernel = torch.einsum('ap,p,bp->ab', jacobians.reshape(-1, P), prior, jacobians_2.reshape(-1, P))
+        return kernel
+
+    def _kernel_star(self, jacobians, batch):
+        """
+        Compute K_star_star kernel matrix.
+
+        Parameters
+        ----------
+        jacobians : torch.Tensor (b, C, P)
+        batch : torch.Tensor (b, C)
+
+        Returns
+        -------
+        kernel : torch.tensor
+            K_star with shape (b, C, C)
+
+        """
+        jacobians_2, _ = self._jacobians(batch)
+        prior = self.prior_factor_sod / self.prior_precision_diag
+        if self.diagonal_kernel:
+            kernel = torch.einsum('bcp,bcp->bc', jacobians, jacobians_2 * prior)
+        else:
+            kernel = torch.einsum('bcp,p,bep->bce', jacobians, prior, jacobians_2)
+        return kernel
+
+    def _kernel_batch_star(self, jacobians, batch):
+        """
+        Compute K_b_star, which is a part of K_M_star kernel matrix.
+
+        Parameters
+        ----------
+        jacobians : torch.Tensor (b1, C, P)
+        batch : torch.Tensor (b2, C)
+
+        Returns
+        -------
+        kernel : torch.tensor
+            K_batch_star with shape (b1, b2, C, C)
+        """
+        jacobians_2, _ = self._jacobians(batch)
+        prior = self.prior_factor_sod / self.prior_precision_diag
+        if self.diagonal_kernel:
+            kernel = torch.einsum('bcp,ecp->bec', jacobians, jacobians_2 * prior)
+        else:
+            kernel = torch.einsum('bcp,p,dep->bdce', jacobians, prior, jacobians_2)
+        return kernel
+
+    def _jacobians(self, X):
+        """
+        A wrapper function to compute jacobians - this enables reusing same kernel methods (kernel_batch etc.)
+        in FunctionalLaplace and FunctionalLLLaplace by simply overwriting this method instead of all kernel methods.
+        """
+        return self.backend.jacobians(X)
+
+    def _mean_scatter_term_batch(self, Js, f, y):
+        """
+        Compute mean vector in the scatter term in the log marginal likelihood
+
+        See `scatter_lml` property above for the exact equations of mean vectors in scatter terms for
+        both types of likelihood (regression, classification).
+
+        Parameters
+        ----------
+        Js : torch.tensor
+              Jacobians (batch, output_shape, parameters)
+        f : torch.tensor
+              NN output (batch, output_shape)
+        y: torch.tensor
+              data labels (batch, output_shape)
+
+        Returns
+        -------
+        mu : torch.tensor
+            K_batch_star with shape (batch, output_shape)
+        """
+
+        if self.likelihood == 'regression':
+            return y - (f + torch.einsum('bcp,p->bc', Js, self.prior_mean - self.map_estimate))
+        elif self.likelihood == "classification":
+            return f

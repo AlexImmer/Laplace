@@ -212,9 +212,7 @@ class GGNInterface(CurvatureInterface):
         if self.likelihood == 'regression':
             H_ggn = torch.einsum('mkp,mkq->pq', Js, Js)
         else:
-            # second derivative of log lik is diag(p) - pp^T
-            ps = torch.softmax(f, dim=-1)
-            H_lik = torch.diag_embed(ps) - torch.einsum('mk,mc->mck', ps, ps)
+            H_lik = self.H_log_likelihood(f)
             H_ggn = torch.einsum('mcp,mck,mkq->pq', Js, H_lik, Js)
         return loss.detach(), H_ggn
 
@@ -246,6 +244,61 @@ class GGNInterface(CurvatureInterface):
         loss, H_ggn = self._get_full_ggn(Js, f, y)
 
         return loss, H_ggn
+
+    def H_log_likelihood(self, f, sigma_factor=None):
+        """
+        Second derivative (Hessian) of log-likelihood w.r.t. the output of NN \\(f\\)
+
+        Parameters
+        ----------
+        f: torch.Tensor
+            Output of the last layer of NN (before softmax layer)
+        sigma_factor: torch.Tensor
+            Precision (scaled with temperature) in regression likelihood. See _H_factor property in BaseLaplace
+
+        Returns
+        -------
+        H_lik: torch.Tensor
+              Hessian of \\(p(y|f)\\) w.r.t. \\(f\\) (batch, output_shape, output_shape)
+        """
+        if self.likelihood == 'regression':
+            assert sigma_factor is not None, 'sigma_factor should be provided for regression'
+            # second derivative is (1 / sigma^2) * I_{C}
+            b, C = f.shape
+            H_lik = sigma_factor * torch.unsqueeze(torch.eye(C), 0).repeat(b, 1, 1)
+        else:
+            # second derivative of log lik is diag(p) - pp^T
+            ps = torch.softmax(f, dim=-1)
+            H_lik = torch.diag_embed(ps) - torch.einsum('mk,mc->mck', ps, ps)
+        return H_lik
+
+    def gp_quantities(self, X, y, sigma_factor):
+        """
+         Parameters
+        ----------
+        x : torch.Tensor
+            input data `(batch, input_shape)`
+        y : torch.Tensor
+            labels `(batch, output_shape)`
+        sigma_factor: inverse of (scaled) likelihood noise
+
+        Returns
+        -------
+        loss : torch.tensor
+        Js : torch.tensor
+              Jacobians (batch, output_shape, parameters)
+        f : torch.tensor
+              NN output (batch, output_shape)
+        lambdas: torch.tensor
+              Hessian of \\( p(y|f) \\) w.r.t. \\(f\\) (batch, output_shape, output_shape)
+        """
+        if self.last_layer:
+            Js, f = self.last_layer_jacobians(X)
+        else:
+            Js, f = self.jacobians(X)
+        lambdas = self.H_log_likelihood(f, sigma_factor)
+        loss = self.factor * self.lossfunc(f, y)
+        return loss.detach(), Js, f, lambdas
 
 
 class EFInterface(CurvatureInterface):

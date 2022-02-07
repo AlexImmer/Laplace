@@ -886,6 +886,26 @@ the modules cannot have children, i.e. need to be leaf modules</dd>
 </li>
 </ul>
 </dd>
+<dt id="laplace.utils.SoDSampler"><code class="flex name class">
+<span>class <span class="ident">SoDSampler</span></span>
+<span>(</span><span>N, M)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Base class for all Samplers.</p>
+<p>Every Sampler subclass has to provide an :meth:<code>__iter__</code> method, providing a
+way to iterate over indices of dataset elements, and a :meth:<code>__len__</code> method
+that returns the length of the returned iterators.</p>
+<div class="admonition note">
+<p class="admonition-title">Note:&ensp;The :meth:<code>__len__</code> method isn't strictly required by</p>
+<p>:class:<code>~torch.utils.data.DataLoader</code>, but is expected in any
+calculation involving the length of a :class:<code>~torch.utils.data.DataLoader</code>.</p>
+</div></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>torch.utils.data.sampler.Sampler</li>
+<li>typing.Generic</li>
+</ul>
+</dd>
 </dl>
 </section>
 </article>
@@ -1004,6 +1024,9 @@ the modules cannot have children, i.e. need to be leaf modules</dd>
 <ul class="">
 <li><code><a title="laplace.utils.LastLayerSubnetMask.get_subnet_mask" href="#laplace.utils.LastLayerSubnetMask.get_subnet_mask">get_subnet_mask</a></code></li>
 </ul>
+</li>
+<li>
+<h4><code><a title="laplace.utils.SoDSampler" href="#laplace.utils.SoDSampler">SoDSampler</a></code></h4>
 </li>
 </ul>
 </li>
